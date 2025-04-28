@@ -1,7 +1,7 @@
 use std::{borrow::Cow, fs};
 use wgpu::util::DeviceExt;
 
-const D: u32 = 2;
+const D: u32 = 12;
 const SAMPLES: u32 = 1000;
 const SUCCESS_THRESHOLD: f32 = 0.1;
 

@@ -4,18 +4,19 @@ const PHI = 0x9e3779b9u;
 const SAMPLES = 1000u;
 const T = 1000u;
 const T_early = 200u;
-const tau = 0.0001;
+const tau = 1e-4;
 
-const N = 10u;
-const WORKGROUP_SIZE = 16u;
-const dm = 0.001 / f32(N);
-const d = 2u;
+const N = 50u;
+const WORKGROUP_SIZE = 50u;
+const dm = 1e-3 / f32(N);
+// const dm = 1e-4;
+const d = 12u;
 const L = 6.0;
 const B = 0.0;
 
 const q = 1.0;
 const A = 0.5;
-const max_dF = 66.73776995;
+const max_dF = 2.0;
 
 @group(0) @binding(0) var<storage, read_write> output_x: array<f32, SAMPLES * d>;
 @group(0) @binding(1) var<storage, read_write> output_f: array<f32, SAMPLES>;
@@ -53,6 +54,28 @@ fn norm_sq(x: array<f32, d>) -> f32 {
     return sum;
 }
 
+fn ackley(x: array<f32, d>) -> f32 {
+    var a = 0.0;
+    for (var k = 0u; k < d; k++) {
+        a += cos(2.0 * PI * x[k]);
+    }
+    var F_value = 20.0 + exp(1.0) - 20.0 * exp(-0.2 * sqrt(norm_sq(x) / f32(d))) - exp(a / f32(d));
+    return F_value;
+}
+
+fn dAckley(x: array<f32, d>) -> array<f32, d> {
+    var dF_value: array<f32, d>;
+    var a = 0.0;
+    for (var k = 0u; k < d; k++) {
+        a += cos(2.0 * PI * x[k]);
+    }
+    var b = sqrt(norm_sq(x) / f32(d));
+    for (var k = 0u; k < d; k++) {
+        dF_value[k] = (4.0/f32(d)) * x[k] * exp(-0.2 * b) / b + (2.0 * PI / f32(d)) * exp(a / f32(d)) * sin(2.0 * PI * x[k]);
+    }
+    return dF_value;
+}
+
 fn sphere(x: array<f32, d>) -> f32 {
     var F_value = 0.0;
     for (var i = 0u; i < d; i++) {
@@ -74,7 +97,7 @@ fn F(x: array<f32, d>) -> f32 {
     for (var i = 0u; i < d; i++) {
         shifted_x[i] = x[i] + B;
     }
-    return rastrigin(shifted_x);
+    return ackley(shifted_x);
 }
 
 fn dF(x: array<f32, d>) -> array<f32, d> {
@@ -82,7 +105,7 @@ fn dF(x: array<f32, d>) -> array<f32, d> {
     for (var i = 0u; i < d; i++) {
         shifted_x[i] = x[i] + B;
     }
-    return dRastrigin(shifted_x);
+    return dAckley(shifted_x);
 }
 
 fn rand(x: u32, min_x: f32, max_x: f32) -> f32 {
@@ -178,6 +201,7 @@ fn cs(
     
     var x: array<f32, d> = get_x(i, sample_id);
     var m = 1.0 / f32(N);
+    // var m = 0.1;
     var f = F(x);
     var df = dF(x);
     inactive[i] = u32(i >= N);
@@ -246,7 +270,8 @@ fn cs(
                     best_x[k] = x[k];
                 }
             } else if ((n - best_n) > T_early) {
-                break;
+                inactive[i] = 1u;
+                // break;
             }
 
             var delta = f(m) * g_val * (f - f_avg);
