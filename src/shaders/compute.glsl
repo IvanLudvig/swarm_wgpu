@@ -1,10 +1,16 @@
-const N = 100u;
-const d = 2u;
-const tau = 0.0001;
 const PI = 3.14159265358979323846;
+
 const T = 2000u;
 const T_early = 200u;
+const tau = 0.0001;
 const dm = 0.001 / f32(N);
+
+const N = 100u;
+const d = 2u;
+
+const q = 1.0;
+const A = 0.5;
+const max_dF = 66.0;
 
 @group(0) @binding(0) var<storage, read> xx: array<f32, N * d>;
 @group(0) @binding(1) var<storage, read_write> inactive: array<u32, N>;
@@ -54,56 +60,58 @@ fn dF(x: array<f32, d>) -> array<f32, d> {
     return dRastrigin(x);
 }
 
-fn rand(x: f32) -> f32 {
-    let sin_val = sin(x * 12.9898);
-    return fract(sin_val * 43758.5453);
-}
-
-fn box_muller(u1: f32, u2: f32) -> f32 {
-    let r = sqrt(-2.0 * log(u1));
-    let theta = 2.0 * PI * u2;
-    return r * cos(theta);
+fn rand(x: f32, min_x: f32, max_x: f32) -> f32 {
+    var r = fract(x * 0.1031);
+    r = r * (r + 33.33);
+    r = r * (r + r);
+    return fract(r) * (max_x - min_x) + min_x;
 }
 
 fn gaussian(seed: f32, mean: f32, variance: f32) -> f32 {
-    let u1 = rand(seed);
-    let u2 = rand(seed + 2.0214);
-    let standard = box_muller(u1, u2);
+    let u1 = rand(seed, 0.0, 1.0);
+    let u2 = rand(seed + 2.0214, 0.0, 1.0);
+
+    let r = sqrt(-2.0 * log(u1));
+    let theta = 2.0 * PI * u2;
+
+    let standard = r * cos(theta);
     return standard * sqrt(variance) + mean;
 }
 
 fn random_direction(seed: f32) -> array<f32, d> {
-    var direction: array<f32, d>;
+    var dir: array<f32, d>;
     var sum = 0.0;
-    for (var i = 0u; i < d; i++) {
-        direction[i] = rand(seed + f32(i));
-        sum += direction[i] * direction[i];
+    for (var k = 0u; k < d; k++) {
+        dir[k] = rand(seed + 2.13 * f32(k), -1.0, 1.0);
+        sum += dir[k] * dir[k];
     }
-    for (var i = 0u; i < d; i++) {
-        direction[i] /= sqrt(sum);
+    if (sum > 0.0) {
+        sum = sqrt(sum);
+        for (var k = 0u; k < d; k++) {
+            dir[k] /= sum;
+        }
     }
-    return direction;
+    return dir;
 }
 
 fn sigma2(m: f32) -> f32 {
-    return max(0.0, (1.0 / m) - 1.0);
+    return max(0.0, (1.0 / pow(m, q)) - 1.0);
 }
 
 fn omega(m: f32, seed: f32) -> array<f32, d> {
     var omega_value: array<f32, d>;
-    let direction = random_direction(seed);
-    // let scale = 33.0 * gaussian(seed + 1.22, 0.0, sigma2(m));
-    let scale = 0.0;
-    for (var i = 0u; i < d; i++) {
-        omega_value[i] = direction[i] * scale;
+    let dir = random_direction(seed);
+    let scale = A * gaussian(seed + 1.22, 0.0, sigma2(m)) * max_dF;
+    for (var k = 0u; k < d; k++) {
+        omega_value[k] = dir[k] * scale;
     }
     return omega_value;
 }
 
 fn get_x(i: u32) -> array<f32, d> {
     var x: array<f32, d>;
-    for (var j = 0u; j < d; j++) {
-        x[j] = xx[i * d + j];
+    for (var k = 0u; k < d; k++) {
+        x[k] = xx[i * d + k];
     }
     return x;
 }
@@ -123,7 +131,7 @@ fn cs(@builtin(global_invocation_id) id: vec3<u32>) {
                 let omega_value = omega(m, m + f32(d)*f32(n + 13) + x[0]*x[d-1]);
                 for (var k = 0u; k < d; k++) {
                     if (m > dm) {
-                        x[k] = x[k] - (tau/m) * (df[k] + omega_value[k]);
+                        x[k] = x[k] + (tau/m) * (-df[k] + omega_value[k]);
                     }
                 }
                 f = F(x);
@@ -169,14 +177,15 @@ fn cs(@builtin(global_invocation_id) id: vec3<u32>) {
                 for (var k = 0u; k < d; k++) {
                     best_x[k] = x[k];
                 }
-            } else if (best_n - n > T_early) {
-                break;
+            } else if ((n - best_n) > T_early) {
+                inactive[i] = 1u;
+                // break;
             }
 
             let g = ff[N];
             let f_avg = ff[N + 1];
 
-            var delta = g * (f - f_avg);
+            var delta = m * g * (f - f_avg);
             m = m - delta * tau;
 
             if (m < dm) {
