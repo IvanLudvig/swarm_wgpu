@@ -2,7 +2,7 @@ use std::{borrow::Cow, fs};
 use wgpu::util::DeviceExt;
 
 const D: u32 = 2;
-const SAMPLES: u32 = 100;
+const SAMPLES: u32 = 1000;
 const SUCCESS_THRESHOLD: f32 = 0.1;
 
 async fn run() {
@@ -17,9 +17,18 @@ async fn run() {
         force_fallback_adapter: false,
     }).await.unwrap();
     
+    let mut limits = wgpu::Limits::default();
+    limits.max_buffer_size = 256 * 4 * 1024 * 1024;
+    limits.max_compute_workgroup_storage_size = 16384 * 4;
+    limits.max_compute_invocations_per_workgroup = 256 * 4;
+    limits.max_compute_workgroup_size_x = 256 * 4;
+    limits.max_compute_workgroup_size_y = 256 * 4;
+    limits.max_compute_workgroup_size_z = 64 * 4;
+    limits.max_storage_buffer_binding_size = 128 * 4 * 1024 * 1024;
+    
     let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
+        required_limits: limits,
         label: None,
         memory_hints: Default::default(),
         trace: Default::default(),
