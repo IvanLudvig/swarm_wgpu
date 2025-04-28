@@ -1,24 +1,19 @@
 use std::{borrow::Cow, fs};
-use rand::{Rng, SeedableRng};
-use rand::rngs::StdRng;
 use wgpu::util::DeviceExt;
 
-const N: u32 = 100;
 const D: u32 = 2;
-const L: f32 = 6.0;
 const SAMPLES: u32 = 100;
+const SUCCESS_THRESHOLD: f32 = 0.1;
 
-async fn run(window: &winit::window::Window) {
+async fn run() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
         ..Default::default()
     });
     
-    let surface = instance.create_surface(window).unwrap();
-    
     let adapter = instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
-        compatible_surface: Some(&surface),
+        compatible_surface: None,
         force_fallback_adapter: false,
     }).await.unwrap();
     
@@ -38,18 +33,6 @@ async fn run(window: &winit::window::Window) {
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(&shader_src)),
     });
 
-    let mut rng = StdRng::seed_from_u64(33);
-    let mut positions = vec![0.0f32; (N * D) as usize];
-    for i in 0..positions.len() {
-        positions[i] = rng.random_range(-L/2.0..L/2.0);
-    }
-
-    let position_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Position Buffer"),
-        contents: bytemuck::cast_slice(&positions),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    });
-    
     let best_position = vec![-1.0f32; (SAMPLES * D) as usize];
     let best_fitness = vec![f32::MAX; SAMPLES as usize];
     let n = vec![0u32; SAMPLES as usize];
@@ -93,23 +76,7 @@ async fn run(window: &winit::window::Window) {
         mapped_at_creation: false,
     });
     
-    let particles_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-        ],
-        label: Some("Particles Bind Group Layout"),
-    });
-    
-    let best_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    let output_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -142,22 +109,11 @@ async fn run(window: &winit::window::Window) {
                 count: None,
             },
         ],
-        label: Some("Best Bind Group Layout"),
+        label: Some("Output Bind Group Layout"),
     });
     
-    let particles_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &particles_bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: position_buffer.as_entire_binding(),
-            },
-        ],
-        label: Some("Particles Bind Group"),
-    });
-    
-    let best_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &best_bind_group_layout,
+    let output_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: &output_bind_group_layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -172,12 +128,12 @@ async fn run(window: &winit::window::Window) {
                 resource: n_buffer.as_entire_binding(),
             },
         ],
-        label: Some("Best Bind Group"),
+        label: Some("Output Bind Group"),
     });
     
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Compute Pipeline Layout"),
-        bind_group_layouts: &[&particles_bind_group_layout, &best_bind_group_layout],
+        bind_group_layouts: &[&output_bind_group_layout],
         push_constant_ranges: &[],
     });
     
@@ -201,8 +157,7 @@ async fn run(window: &winit::window::Window) {
             timestamp_writes: None,
         });
         compute_pass.set_pipeline(&compute_pipeline);
-        compute_pass.set_bind_group(0, &particles_bind_group, &[]);
-        compute_pass.set_bind_group(1, &best_bind_group, &[]);
+        compute_pass.set_bind_group(0, &output_bind_group, &[]);
         compute_pass.dispatch_workgroups(SAMPLES, 1, 1);
     }
 
@@ -249,25 +204,55 @@ async fn run(window: &winit::window::Window) {
         let n_data = best_n_slice.get_mapped_range();
         
         let best_positions: &[f32] = bytemuck::cast_slice(&position_data);
-        let best_fitness: &[f32] = bytemuck::cast_slice(&fitness_data);
+        // let best_fitness: &[f32] = bytemuck::cast_slice(&fitness_data);
         let best_n: &[u32] = bytemuck::cast_slice(&n_data);
         
-        println!("Sample\tF(x)\t\tIter\tPosition");
+        
+        let mut successful_count = 0;
+        let mut total_iterations = 0;
+        let mut successful_iterations = 0;
+        
+        // println!("Sample\tF(x)\t\tIter\tPosition\tSuccess");
         for sample in 0..SAMPLES as usize {
             let start_idx = sample * D as usize;
             let position = &best_positions[start_idx..start_idx + D as usize];
-            let position_str = position.iter()
-                .map(|x| format!("{:.6}", x))
-                .collect::<Vec<_>>()
-                .join(", ");
             
-            println!("{}\t{:.6}\t{}\t[{}]", 
-                sample, 
-                best_fitness[sample], 
-                best_n[sample],
-                position_str
-            );
+            // Calculate Euclidean distance from origin (for sphere function)
+            let distance = position.iter().map(|&x| x * x).sum::<f32>().sqrt();
+            let success = distance < SUCCESS_THRESHOLD;
+            
+            if success {
+                successful_count += 1;
+                successful_iterations += best_n[sample];
+            }
+            
+            total_iterations += best_n[sample];
+            
+            // let position_str = position.iter()
+            //     .map(|x| format!("{:.6}", x))
+            //     .collect::<Vec<_>>()
+            //     .join(", ");
+            
+            // println!("{}\t{:.6}\t{}\t[{}]\t{}", 
+            //     sample, 
+            //     best_fitness[sample], 
+            //     best_n[sample],
+            //     position_str,
+            //     if success { "✓" } else { "✗" }
+            // );
         }
+        
+        let success_rate = successful_count as f32 / SAMPLES as f32;
+        let avg_iterations = total_iterations as f32 / SAMPLES as f32;
+        let avg_successful_iterations = if successful_count > 0 {
+            successful_iterations as f32 / successful_count as f32
+        } else {
+            0.0
+        };
+        
+        println!("Success rate: {:.2}%", success_rate*100.0);
+        println!("Average iterations: {:.1}", avg_iterations);
+        println!("Average iterations for successful runs: {:.1}", avg_successful_iterations);
         
         drop(position_data);
         drop(fitness_data);
@@ -279,23 +264,6 @@ async fn run(window: &winit::window::Window) {
 }
 
 fn main() {
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
-    let window = winit::window::WindowBuilder::new()
-        .with_title("Swarm WGPU Optimization")
-        .build(&event_loop)
-        .unwrap();
-
-    futures::executor::block_on(run(&window));
-    
-    println!("Optimization complete. Window will close on user input.");
-    
-    event_loop.run(move |event, elwt| {
-        match event {
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::CloseRequested,
-                ..
-            } => elwt.exit(),
-            _ => {}
-        }
-    }).expect("Error while running event loop");
+    futures::executor::block_on(run());
+    println!("Optimization complete.");
 }

@@ -6,18 +6,17 @@ const T_early = 200u;
 const tau = 0.0001;
 const dm = 0.001 / f32(N);
 
-const N = 100u;
+const N = 10u;
 const d = 2u;
+const L = 6.0;
 
 const q = 1.0;
 const A = 0.5;
 const max_dF = 66.0;
 
-@group(0) @binding(0) var<storage, read> xx: array<f32, N * d>;
-
-@group(1) @binding(0) var<storage, read_write> output_x: array<f32, SAMPLES * d>;
-@group(1) @binding(1) var<storage, read_write> output_f: array<f32, SAMPLES>;
-@group(1) @binding(2) var<storage, read_write> output_n: array<u32, SAMPLES>;
+@group(0) @binding(0) var<storage, read_write> output_x: array<f32, SAMPLES * d>;
+@group(0) @binding(1) var<storage, read_write> output_f: array<f32, SAMPLES>;
+@group(0) @binding(2) var<storage, read_write> output_n: array<u32, SAMPLES>;
 
 var<workgroup> inactive: array<u32, N>;
 var<workgroup> ff: array<f32, N + 2>;
@@ -58,11 +57,11 @@ fn dSphere(x: array<f32, d>) -> array<f32, d> {
 }
 
 fn F(x: array<f32, d>) -> f32 {
-    return sphere(x);
+    return rastrigin(x);
 }
 
 fn dF(x: array<f32, d>) -> array<f32, d> {
-    return dSphere(x);
+    return dRastrigin(x);
 }
 
 fn rand(x: f32, min_x: f32, max_x: f32) -> f32 {
@@ -113,10 +112,12 @@ fn omega(m: f32, seed: f32) -> array<f32, d> {
     return omega_value;
 }
 
-fn get_x(i: u32) -> array<f32, d> {
+fn get_x(i: u32, sample_id: u32) -> array<f32, d> {
     var x: array<f32, d>;
+    let base_seed = 33.0 + f32(sample_id) * 1000.0 + f32(i) * 10.0;
+    
     for (var k = 0u; k < d; k++) {
-        x[k] = xx[i * d + k];
+        x[k] = rand(base_seed + f32(k) * 7.89, -L/2.0, L/2.0);
     }
     return x;
 }
@@ -130,7 +131,7 @@ fn cs(
     let sample_id = workgroup_id.x;
     let i = local_id.x;
     
-    var x: array<f32, d> = get_x(i);
+    var x: array<f32, d> = get_x(i, sample_id);
     var m = 1.0 / f32(N);
     var f = F(x);
     var df = dF(x);
@@ -147,7 +148,7 @@ fn cs(
     for (var n = 0u; n < T; n++) {
         if (inactive[i] != 1u) {
             if (n > 0u) {
-                let omega_value = omega(m, m + f32(d)*f32(n + 13) + x[0]*x[d-1]);
+                let omega_value = omega(m, m + f32(d)*f32(n + 13) + x[0]*x[d-1] + 5.43 * f32(sample_id));
                 for (var k = 0u; k < d; k++) {
                     if (m > dm) {
                         x[k] = x[k] + (tau/m) * (-df[k] + omega_value[k]);
@@ -195,8 +196,8 @@ fn cs(
                     best_x[k] = x[k];
                 }
             } else if ((n - best_n) > T_early) {
-                inactive[i] = 1u;
-                // break;
+                // inactive[i] = 1u;
+                break;
             }
 
             let g = ff[N];
