@@ -1,5 +1,6 @@
 const PI = 3.14159265358979323846;
 
+const SAMPLES = 100u;
 const T = 2000u;
 const T_early = 200u;
 const tau = 0.0001;
@@ -14,12 +15,15 @@ const max_dF = 66.0;
 
 @group(0) @binding(0) var<storage, read> xx: array<f32, N * d>;
 
-@group(1) @binding(0) var<storage, read_write> best_x: array<f32, d>;
-@group(1) @binding(1) var<storage, read_write> best_f: f32;
-@group(1) @binding(2) var<storage, read_write> best_n: u32;
+@group(1) @binding(0) var<storage, read_write> output_x: array<f32, SAMPLES * d>;
+@group(1) @binding(1) var<storage, read_write> output_f: array<f32, SAMPLES>;
+@group(1) @binding(2) var<storage, read_write> output_n: array<u32, SAMPLES>;
 
 var<workgroup> inactive: array<u32, N>;
 var<workgroup> ff: array<f32, N + 2>;
+var<workgroup> best_x: array<f32, d>;
+var<workgroup> best_f: f32;
+var<workgroup> best_n: u32;
 
 fn rastrigin(x: array<f32, d>) -> f32 {
     var F_value = 10.0 * f32(d);
@@ -118,14 +122,27 @@ fn get_x(i: u32) -> array<f32, d> {
 }
 
 @compute @workgroup_size(N)
-fn cs(@builtin(global_invocation_id) id: vec3<u32>) {
-    let i = id.x;
+fn cs(
+    @builtin(global_invocation_id) global_id: vec3<u32>, 
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
+    @builtin(local_invocation_id) local_id: vec3<u32>
+) {
+    let sample_id = workgroup_id.x;
+    let i = local_id.x;
     
     var x: array<f32, d> = get_x(i);
     var m = 1.0 / f32(N);
     var f = F(x);
     var df = dF(x);
     inactive[i] = 0u;
+
+    if (i == 0u) {
+        best_f = f;
+        best_n = 0u;
+        for (var k = 0u; k < d; k++) {
+            best_x[k] = x[k];
+        }
+    }
 
     for (var n = 0u; n < T; n++) {
         if (inactive[i] != 1u) {
@@ -192,5 +209,13 @@ fn cs(@builtin(global_invocation_id) id: vec3<u32>) {
                 inactive[i] = 1u;
             }
         }
+    }
+
+    if (i == 0u) {
+        for (var k = 0u; k < d; k++) {
+            output_x[sample_id * d + k] = best_x[k];
+        }
+        output_f[sample_id] = best_f;
+        output_n[sample_id] = best_n;
     }
 }

@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 const N: u32 = 100;
 const D: u32 = 2;
 const L: f32 = 6.0;
+const SAMPLES: u32 = 100;
 
 async fn run(window: &winit::window::Window) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -49,9 +50,9 @@ async fn run(window: &winit::window::Window) {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
     });
     
-    let best_position = vec![-1.0f32; D as usize];
-    let best_fitness = vec![f32::MAX];
-    let n = vec![0u32];
+    let best_position = vec![-1.0f32; (SAMPLES * D) as usize];
+    let best_fitness = vec![f32::MAX; SAMPLES as usize];
+    let n = vec![0u32; SAMPLES as usize];
     
     let best_position_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Best Position Buffer"),
@@ -73,21 +74,21 @@ async fn run(window: &winit::window::Window) {
     
     let staging_best_position_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging Best Position Buffer"),
-        size: (D as usize * std::mem::size_of::<f32>()) as u64,
+        size: (SAMPLES * D) as u64 * std::mem::size_of::<f32>() as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     
     let staging_best_fitness_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging Best Fitness Buffer"),
-        size: std::mem::size_of::<f32>() as u64,
+        size: SAMPLES as u64 * std::mem::size_of::<f32>() as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     
     let staging_best_n_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging Best N Buffer"),
-        size: std::mem::size_of::<u32>() as u64,
+        size: SAMPLES as u64 * std::mem::size_of::<u32>() as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -202,25 +203,25 @@ async fn run(window: &winit::window::Window) {
         compute_pass.set_pipeline(&compute_pipeline);
         compute_pass.set_bind_group(0, &particles_bind_group, &[]);
         compute_pass.set_bind_group(1, &best_bind_group, &[]);
-        compute_pass.dispatch_workgroups(1, 1, 1);
+        compute_pass.dispatch_workgroups(SAMPLES, 1, 1);
     }
 
     encoder.copy_buffer_to_buffer(
         &best_position_buffer, 0,
         &staging_best_position_buffer, 0,
-        (D as usize * std::mem::size_of::<f32>()) as u64
+        (SAMPLES * D) as u64 * std::mem::size_of::<f32>() as u64
     );
     
     encoder.copy_buffer_to_buffer(
         &best_fitness_buffer, 0,
         &staging_best_fitness_buffer, 0,
-        std::mem::size_of::<f32>() as u64
+        SAMPLES as u64 * std::mem::size_of::<f32>() as u64
     );
     
     encoder.copy_buffer_to_buffer(
         &n_buffer, 0,
         &staging_best_n_buffer, 0,
-        std::mem::size_of::<u32>() as u64
+        SAMPLES as u64 * std::mem::size_of::<u32>() as u64
     );
     
     queue.submit(Some(encoder.finish()));
@@ -239,27 +240,40 @@ async fn run(window: &winit::window::Window) {
     
     let _ = device.poll(wgpu::MaintainBase::Wait);
     
-    if best_position_receiver.receive().await.unwrap().is_ok() {
-        let data = best_position_slice.get_mapped_range();
-        let best_position: &[f32] = bytemuck::cast_slice(&data);
-        println!("x: {:?}", &best_position[0..D as usize]);
-        drop(data);
+    if best_position_receiver.receive().await.unwrap().is_ok() && 
+       best_fitness_receiver.receive().await.unwrap().is_ok() && 
+       best_n_receiver.receive().await.unwrap().is_ok() {
+        
+        let position_data = best_position_slice.get_mapped_range();
+        let fitness_data = best_fitness_slice.get_mapped_range();
+        let n_data = best_n_slice.get_mapped_range();
+        
+        let best_positions: &[f32] = bytemuck::cast_slice(&position_data);
+        let best_fitness: &[f32] = bytemuck::cast_slice(&fitness_data);
+        let best_n: &[u32] = bytemuck::cast_slice(&n_data);
+        
+        println!("Sample\tF(x)\t\tIter\tPosition");
+        for sample in 0..SAMPLES as usize {
+            let start_idx = sample * D as usize;
+            let position = &best_positions[start_idx..start_idx + D as usize];
+            let position_str = position.iter()
+                .map(|x| format!("{:.6}", x))
+                .collect::<Vec<_>>()
+                .join(", ");
+            
+            println!("{}\t{:.6}\t{}\t[{}]", 
+                sample, 
+                best_fitness[sample], 
+                best_n[sample],
+                position_str
+            );
+        }
+        
+        drop(position_data);
+        drop(fitness_data);
+        drop(n_data);
         staging_best_position_buffer.unmap();
-    }
-    
-    if best_fitness_receiver.receive().await.unwrap().is_ok() {
-        let data = best_fitness_slice.get_mapped_range();
-        let best_fitness: &[f32] = bytemuck::cast_slice(&data);
-        println!("F(x): {}", best_fitness[0]);
-        drop(data);
         staging_best_fitness_buffer.unmap();
-    }
-    
-    if best_n_receiver.receive().await.unwrap().is_ok() {
-        let data = best_n_slice.get_mapped_range();
-        let best_n: &[u32] = bytemuck::cast_slice(&data);
-        println!("best_n: {}", best_n[0]);
-        drop(data);
         staging_best_n_buffer.unmap();
     }
 }
