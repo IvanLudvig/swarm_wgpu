@@ -11,6 +11,7 @@ const WORKGROUP_SIZE = 16u;
 const dm = 0.001 / f32(N);
 const d = 2u;
 const L = 6.0;
+const B = 0.0;
 
 const q = 1.0;
 const A = 0.5;
@@ -44,6 +45,14 @@ fn dRastrigin(x: array<f32, d>) -> array<f32, d> {
     return dF_value;
 }
 
+fn norm_sq(x: array<f32, d>) -> f32 {
+    var sum = 0.0;
+    for (var i = 0u; i < d; i++) {
+        sum += x[i] * x[i];
+    }
+    return sum;
+}
+
 fn sphere(x: array<f32, d>) -> f32 {
     var F_value = 0.0;
     for (var i = 0u; i < d; i++) {
@@ -61,11 +70,19 @@ fn dSphere(x: array<f32, d>) -> array<f32, d> {
 }
 
 fn F(x: array<f32, d>) -> f32 {
-    return rastrigin(x);
+    var shifted_x: array<f32, d>;
+    for (var i = 0u; i < d; i++) {
+        shifted_x[i] = x[i] + B;
+    }
+    return rastrigin(shifted_x);
 }
 
 fn dF(x: array<f32, d>) -> array<f32, d> {
-    return dRastrigin(x);
+    var shifted_x: array<f32, d>;
+    for (var i = 0u; i < d; i++) {
+        shifted_x[i] = x[i] + B;
+    }
+    return dRastrigin(shifted_x);
 }
 
 fn rand(x: u32, min_x: f32, max_x: f32) -> f32 {
@@ -243,7 +260,7 @@ fn cs(
 
     if (i == 0u) {
         for (var k = 0u; k < d; k++) {
-            output_x[sample_id * d + k] = best_x[k];
+            output_x[sample_id * d + k] = best_x[k] + B;
         }
         output_f[sample_id] = best_f;
         output_n[sample_id] = best_n;
