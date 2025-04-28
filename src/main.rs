@@ -43,24 +43,9 @@ async fn run(window: &winit::window::Window) {
         positions[i] = rng.random_range(-L/2.0..L/2.0);
     }
 
-    let inactive = vec![0u32; N as usize];
-    let fitness = vec![0.0f32; N as usize + 2];
-    
     let position_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Position Buffer"),
         contents: bytemuck::cast_slice(&positions),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    });
-    
-    let inactive_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Inactive Buffer"),
-        contents: bytemuck::cast_slice(&inactive),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    });
-    
-    let fitness_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Fitness Buffer"),
-        contents: bytemuck::cast_slice(&fitness),
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
     });
     
@@ -119,26 +104,6 @@ async fn run(window: &winit::window::Window) {
                 },
                 count: None,
             },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
         ],
         label: Some("Particles Bind Group Layout"),
     });
@@ -185,14 +150,6 @@ async fn run(window: &winit::window::Window) {
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: position_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: inactive_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: fitness_buffer.as_entire_binding(),
             },
         ],
         label: Some("Particles Bind Group"),

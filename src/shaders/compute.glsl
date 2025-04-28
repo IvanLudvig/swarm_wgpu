@@ -13,12 +13,13 @@ const A = 0.5;
 const max_dF = 66.0;
 
 @group(0) @binding(0) var<storage, read> xx: array<f32, N * d>;
-@group(0) @binding(1) var<storage, read_write> inactive: array<u32, N>;
-@group(0) @binding(2) var<storage, read_write> ff: array<f32, N + 2>;
 
 @group(1) @binding(0) var<storage, read_write> best_x: array<f32, d>;
 @group(1) @binding(1) var<storage, read_write> best_f: f32;
 @group(1) @binding(2) var<storage, read_write> best_n: u32;
+
+var<workgroup> inactive: array<u32, N>;
+var<workgroup> ff: array<f32, N + 2>;
 
 fn rastrigin(x: array<f32, d>) -> f32 {
     var F_value = 10.0 * f32(d);
@@ -53,11 +54,11 @@ fn dSphere(x: array<f32, d>) -> array<f32, d> {
 }
 
 fn F(x: array<f32, d>) -> f32 {
-    return rastrigin(x);
+    return sphere(x);
 }
 
 fn dF(x: array<f32, d>) -> array<f32, d> {
-    return dRastrigin(x);
+    return dSphere(x);
 }
 
 fn rand(x: f32, min_x: f32, max_x: f32) -> f32 {
@@ -82,7 +83,7 @@ fn random_direction(seed: f32) -> array<f32, d> {
     var dir: array<f32, d>;
     var sum = 0.0;
     for (var k = 0u; k < d; k++) {
-        dir[k] = rand(seed + 2.13 * f32(k), -1.0, 1.0);
+        dir[k] = rand(seed + 2.13 * f32(k) + sum, -1.0, 1.0);
         sum += dir[k] * dir[k];
     }
     if (sum > 0.0) {
@@ -119,11 +120,12 @@ fn get_x(i: u32) -> array<f32, d> {
 @compute @workgroup_size(N)
 fn cs(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
-
+    
     var x: array<f32, d> = get_x(i);
     var m = 1.0 / f32(N);
     var f = F(x);
     var df = dF(x);
+    inactive[i] = 0u;
 
     for (var n = 0u; n < T; n++) {
         if (inactive[i] != 1u) {
@@ -141,7 +143,6 @@ fn cs(@builtin(global_invocation_id) id: vec3<u32>) {
         }
 
         workgroupBarrier();
-        storageBarrier();
 
         if (i == 0u) {
             var f_max = f;
@@ -170,7 +171,6 @@ fn cs(@builtin(global_invocation_id) id: vec3<u32>) {
         }
 
         workgroupBarrier();
-        storageBarrier();
 
         if (inactive[i] != 1u) {
             if (best_n == n && best_f == f) {
