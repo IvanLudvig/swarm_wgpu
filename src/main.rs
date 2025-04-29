@@ -1,9 +1,13 @@
 use std::{borrow::Cow, fs};
 use wgpu::util::DeviceExt;
 
-const D: u32 = 12;
+const D: u32 = 4;
 const SAMPLES: u32 = 1000;
 const SUCCESS_THRESHOLD: f32 = 0.1;
+
+const PARAM1_VALUES: &[f32] = &[0.5, 1.0, 2.0];
+const PARAM2_VALUES: &[f32] = &[0.01, 0.05, 0.1, 0.2, 0.5, 0.7, 1.0, 1.5, 2.0];
+const GRID_SIZE: u32 = (PARAM1_VALUES.len() * PARAM2_VALUES.len()) as u32;
 
 async fn run() {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -42,9 +46,9 @@ async fn run() {
         source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(&shader_src)),
     });
 
-    let best_position = vec![-1.0f32; (SAMPLES * D) as usize];
-    let best_fitness = vec![f32::MAX; SAMPLES as usize];
-    let n = vec![0u32; SAMPLES as usize];
+    let best_position = vec![-1.0f32; (GRID_SIZE * SAMPLES * D) as usize];
+    let best_fitness = vec![f32::MAX; (GRID_SIZE * SAMPLES) as usize];
+    let n = vec![0u32; (GRID_SIZE * SAMPLES) as usize];
     
     let best_position_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Best Position Buffer"),
@@ -66,23 +70,39 @@ async fn run() {
     
     let staging_best_position_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging Best Position Buffer"),
-        size: (SAMPLES * D) as u64 * std::mem::size_of::<f32>() as u64,
+        size: (GRID_SIZE * SAMPLES * D) as u64 * std::mem::size_of::<f32>() as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     
     let staging_best_fitness_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging Best Fitness Buffer"),
-        size: SAMPLES as u64 * std::mem::size_of::<f32>() as u64,
+        size: (GRID_SIZE * SAMPLES) as u64 * std::mem::size_of::<f32>() as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
     
     let staging_best_n_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Staging Best N Buffer"),
-        size: SAMPLES as u64 * std::mem::size_of::<u32>() as u64,
+        size: (GRID_SIZE * SAMPLES) as u64 * std::mem::size_of::<u32>() as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
+    });
+    
+    let mut param_sets = Vec::with_capacity((GRID_SIZE * 4) as usize);
+    for &p1 in PARAM1_VALUES {
+        for &p2 in PARAM2_VALUES {
+            param_sets.push(p1);
+            param_sets.push(p2);
+            param_sets.push(0.0f32);
+            param_sets.push(0.0f32);
+        }
+    }
+
+    let param_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Parameter Buffer"),
+        contents: bytemuck::cast_slice(&param_sets),
+        usage: wgpu::BufferUsages::UNIFORM,
     });
     
     let output_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -140,9 +160,36 @@ async fn run() {
         label: Some("Output Bind Group"),
     });
     
+    let param_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+        label: Some("Parameter Bind Group Layout"),
+    });
+
+    let param_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: &param_bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: param_buffer.as_entire_binding(),
+            },
+        ],
+        label: Some("Parameter Bind Group"),
+    });
+    
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Compute Pipeline Layout"),
-        bind_group_layouts: &[&output_bind_group_layout],
+        bind_group_layouts: &[&output_bind_group_layout, &param_bind_group_layout],
         push_constant_ranges: &[],
     });
     
@@ -167,25 +214,26 @@ async fn run() {
         });
         compute_pass.set_pipeline(&compute_pipeline);
         compute_pass.set_bind_group(0, &output_bind_group, &[]);
-        compute_pass.dispatch_workgroups(SAMPLES, 1, 1);
+        compute_pass.set_bind_group(1, &param_bind_group, &[]);
+        compute_pass.dispatch_workgroups(SAMPLES, GRID_SIZE, 1);
     }
 
     encoder.copy_buffer_to_buffer(
         &best_position_buffer, 0,
         &staging_best_position_buffer, 0,
-        (SAMPLES * D) as u64 * std::mem::size_of::<f32>() as u64
+        (GRID_SIZE * SAMPLES * D) as u64 * std::mem::size_of::<f32>() as u64
     );
     
     encoder.copy_buffer_to_buffer(
         &best_fitness_buffer, 0,
         &staging_best_fitness_buffer, 0,
-        SAMPLES as u64 * std::mem::size_of::<f32>() as u64
+        (GRID_SIZE * SAMPLES) as u64 * std::mem::size_of::<f32>() as u64
     );
     
     encoder.copy_buffer_to_buffer(
         &n_buffer, 0,
         &staging_best_n_buffer, 0,
-        SAMPLES as u64 * std::mem::size_of::<u32>() as u64
+        (GRID_SIZE * SAMPLES) as u64 * std::mem::size_of::<u32>() as u64
     );
     
     queue.submit(Some(encoder.finish()));
@@ -213,55 +261,36 @@ async fn run() {
         let n_data = best_n_slice.get_mapped_range();
         
         let best_positions: &[f32] = bytemuck::cast_slice(&position_data);
-        // let best_fitness: &[f32] = bytemuck::cast_slice(&fitness_data);
         let best_n: &[u32] = bytemuck::cast_slice(&n_data);
+        println!("Params \t \t Iterations \t Success");
         
-        
-        let mut successful_count = 0;
-        let mut total_iterations = 0;
-        let mut successful_iterations = 0;
-        
-        // println!("Sample\tF(x)\t\tIter\tPosition\tSuccess");
-        for sample in 0..SAMPLES as usize {
-            let start_idx = sample * D as usize;
-            let position = &best_positions[start_idx..start_idx + D as usize];
+        for param_id in 0..GRID_SIZE {
+            let p1 = param_sets[param_id as usize * 4];
+            let p2 = param_sets[param_id as usize * 4 + 1];
             
-            // Calculate Euclidean distance from origin (for sphere function)
-            let distance = position.iter().map(|&x| x * x).sum::<f32>().sqrt();
-            let success = distance < SUCCESS_THRESHOLD;
+            let mut successful_count = 0;
+            let mut total_iterations = 0;
             
-            if success {
-                successful_count += 1;
-                successful_iterations += best_n[sample];
+            for sample in 0..SAMPLES as usize {
+                let output_index = (param_id * SAMPLES) as usize + sample;
+                let start_idx = output_index * D as usize;
+                let position = &best_positions[start_idx..start_idx + D as usize];
+                
+                let distance = position.iter().map(|&x| x * x).sum::<f32>().sqrt();
+                let success = distance < SUCCESS_THRESHOLD;
+                
+                if success {
+                    successful_count += 1;
+                }
+                
+                total_iterations += best_n[output_index];
             }
             
-            total_iterations += best_n[sample];
+            let success_rate = successful_count as f32 / SAMPLES as f32;
+            let avg_iterations = total_iterations as f32 / SAMPLES as f32;
             
-            // let position_str = position.iter()
-            //     .map(|x| format!("{:.6}", x))
-            //     .collect::<Vec<_>>()
-            //     .join(", ");
-            
-            // println!("{}\t{:.6}\t{}\t[{}]\t{}", 
-            //     sample, 
-            //     best_fitness[sample], 
-            //     best_n[sample],
-            //     position_str,
-            //     if success { "✓" } else { "✗" }
-            // );
+            println!("({:.1}, {:.})\t {:.1}\t\t {:.1}%", p1, p2, avg_iterations, success_rate*100.0);
         }
-        
-        let success_rate = successful_count as f32 / SAMPLES as f32;
-        let avg_iterations = total_iterations as f32 / SAMPLES as f32;
-        let avg_successful_iterations = if successful_count > 0 {
-            successful_iterations as f32 / successful_count as f32
-        } else {
-            0.0
-        };
-        
-        println!("Success rate: {:.2}%", success_rate*100.0);
-        println!("Average iterations: {:.1}", avg_iterations);
-        println!("Average iterations for successful runs: {:.1}", avg_successful_iterations);
         
         drop(position_data);
         drop(fitness_data);
@@ -274,5 +303,4 @@ async fn run() {
 
 fn main() {
     futures::executor::block_on(run());
-    println!("Optimization complete.");
 }

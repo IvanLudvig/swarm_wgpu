@@ -1,6 +1,7 @@
 const PI = 3.14159265358979323846;
 const PHI = 0x9e3779b9u;
 
+const GRID_SIZE = 27u;
 const SAMPLES = 1000u;
 const T = 1000u;
 const T_early = 200u;
@@ -8,19 +9,18 @@ const tau = 1e-4;
 
 const N = 50u;
 const WORKGROUP_SIZE = 50u;
-const dm = 1e-3 / f32(N);
-// const dm = 1e-4;
-const d = 12u;
+// const dm = 1e-3 / f32(N);
+const dm = 1e-4;
+const d = 4u;
 const L = 6.0;
 const B = 0.0;
 
-const q = 1.0;
-const A = 0.5;
-const max_dF = 2.0;
+const max_dF = 66.0;
 
-@group(0) @binding(0) var<storage, read_write> output_x: array<f32, SAMPLES * d>;
-@group(0) @binding(1) var<storage, read_write> output_f: array<f32, SAMPLES>;
-@group(0) @binding(2) var<storage, read_write> output_n: array<u32, SAMPLES>;
+@group(0) @binding(0) var<storage, read_write> output_x: array<f32, GRID_SIZE * SAMPLES * d>;
+@group(0) @binding(1) var<storage, read_write> output_f: array<f32, GRID_SIZE * SAMPLES>;
+@group(0) @binding(2) var<storage, read_write> output_n: array<u32, GRID_SIZE * SAMPLES>;
+@group(1) @binding(0) var<uniform> params_space: array<vec4<f32>, GRID_SIZE>;
 
 var<workgroup> inactive: array<u32, N>;
 var<workgroup> ff: array<f32, N>;
@@ -97,7 +97,7 @@ fn F(x: array<f32, d>) -> f32 {
     for (var i = 0u; i < d; i++) {
         shifted_x[i] = x[i] + B;
     }
-    return ackley(shifted_x);
+    return rastrigin(shifted_x);
 }
 
 fn dF(x: array<f32, d>) -> array<f32, d> {
@@ -105,7 +105,7 @@ fn dF(x: array<f32, d>) -> array<f32, d> {
     for (var i = 0u; i < d; i++) {
         shifted_x[i] = x[i] + B;
     }
-    return dAckley(shifted_x);
+    return dRastrigin(shifted_x);
 }
 
 fn rand(x: u32, min_x: f32, max_x: f32) -> f32 {
@@ -155,15 +155,17 @@ fn random_direction(seed: u32) -> array<f32, d> {
     return dir;
 }
 
-fn sigma2(m: f32) -> f32 {
+fn sigma2(m: f32, q: f32) -> f32 {
     return max(0.0, (1.0 / pow(m, q)) - 1.0);
 }
 
-fn omega(m: f32, seed: u32) -> array<f32, d> {
+fn omega(m: f32, params: vec2<f32>, seed: u32) -> array<f32, d> {
     var omega_value: array<f32, d>;
     let dir = random_direction(seed);
     let scale_seed = (seed << 13u) | (seed >> 19u);
-    let scale = A * max_dF * gaussian(scale_seed, 0.0, sigma2(m));
+    let q = params.x;
+    let a = params.y;
+    let scale = a * max_dF * gaussian(scale_seed, 0.0, sigma2(m, q));
     for (var k = 0u; k < d; k++) {
         omega_value[k] = dir[k] * scale;
     }
@@ -197,11 +199,17 @@ fn cs(
     @builtin(local_invocation_id) local_id: vec3<u32>
 ) {
     let sample_id = workgroup_id.x;
+    let param_id = workgroup_id.y;
     let i = local_id.x;
+        
+    let params = vec2<f32>(
+        params_space[param_id].x, 
+        params_space[param_id].y
+    );
     
     var x: array<f32, d> = get_x(i, sample_id);
-    var m = 1.0 / f32(N);
-    // var m = 0.1;
+    // var m = 1.0 / f32(N);
+    var m = 0.1;
     var f = F(x);
     var df = dF(x);
     inactive[i] = u32(i >= N);
@@ -217,10 +225,10 @@ fn cs(
     for (var n = 0u; n < T; n++) {
         if (inactive[i] != 1u) {
             if (n > 0u) {
-                let omega_seed = n * PHI + i * 0x85ebca77u + sample_id * 0xc2b2ae3du;
+                let omega_seed = n * PHI + i * 0x85ebca77u + sample_id * 0xc2b2ae3du + param_id * 0x27d4eb2du;
                 let mixed_seed = omega_seed ^ (omega_seed >> 16u);
                 
-                let omega_value = omega(m, mixed_seed);
+                let omega_value = omega(m, params, mixed_seed);
                 for (var k = 0u; k < d; k++) {
                     if (m > dm) {
                         x[k] = x[k] + (tau/m) * (-df[k] + omega_value[k]);
@@ -284,10 +292,11 @@ fn cs(
     }
 
     if (i == 0u) {
+        let output_index = param_id * SAMPLES + sample_id;
         for (var k = 0u; k < d; k++) {
-            output_x[sample_id * d + k] = best_x[k] + B;
+            output_x[output_index * d + k] = best_x[k] + B;
         }
-        output_f[sample_id] = best_f;
-        output_n[sample_id] = best_n;
+        output_f[output_index] = best_f;
+        output_n[output_index] = best_n;
     }
 }
