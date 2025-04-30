@@ -5,8 +5,6 @@ edition = "2024"
 
 [dependencies]
 wgpu = "*"
-winit = "0.29.4"
 futures = "*"
-rand = "0.9.1"
 bytemuck = "1.22.0"
 futures-intrusive = "0.5.0"
