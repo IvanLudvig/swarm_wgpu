@@ -1,15 +1,17 @@
 use std::{borrow::Cow, fs};
 use wgpu::util::DeviceExt;
 
-const D: u32 = 4;
+const D: u32 = 3;
 const SAMPLES: u32 = 1000;
 const SUCCESS_THRESHOLD: f32 = 0.1;
 
 const PARAM1_VALUES: &[f32] = &[0.5, 1.0, 2.0];
-const PARAM2_VALUES: &[f32] = &[0.01, 0.05, 0.1, 0.2, 0.5, 0.7, 1.0, 1.5, 2.0];
+const PARAM2_VALUES: &[f32] = &[0.1, 0.5, 1.0, 2.0];
 const GRID_SIZE: u32 = (PARAM1_VALUES.len() * PARAM2_VALUES.len()) as u32;
 
 async fn run() {
+    let start_time = std::time::Instant::now();
+    
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
         ..Default::default()
@@ -299,6 +301,9 @@ async fn run() {
         staging_best_fitness_buffer.unmap();
         staging_best_n_buffer.unmap();
     }
+    
+    let execution_time = start_time.elapsed();
+    println!("Execution time: {} ms", execution_time.as_millis());
 }
 
 fn main() {

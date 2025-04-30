@@ -1,7 +1,7 @@
 const PI = 3.14159265358979323846;
 const PHI = 0x9e3779b9u;
 
-const GRID_SIZE = 27u;
+const GRID_SIZE = 12u;
 const SAMPLES = 1000u;
 const T = 1000u;
 const T_early = 200u;
@@ -11,7 +11,7 @@ const N = 50u;
 const WORKGROUP_SIZE = 50u;
 // const dm = 1e-3 / f32(N);
 const dm = 1e-4;
-const d = 4u;
+const d = 3u;
 const L = 6.0;
 const B = 0.0;
 
@@ -128,23 +128,33 @@ fn rand(x: u32, min_x: f32, max_x: f32) -> f32 {
     return min_x + (max_x - min_x) * normalized;
 }
 
-fn gaussian(seed: u32, mean: f32, variance: f32) -> f32 {
+fn gaussian(seed: u32, mean: f32, variance: f32) -> vec2<f32> {
     let u1 = rand(seed, 0.0, 1.0);
     let u2 = rand(seed * PHI, 0.0, 1.0);
     
     let r = sqrt(-2.0 * log(max(1e-6, u1)));
     let theta = 2.0 * PI * u2;
     
-    let standard = r * cos(theta);
-    return standard * sqrt(variance) + mean;
+    let n1 = r * cos(theta);
+    let n2 = r * sin(theta);
+
+    let res = vec2<f32>(n1, n2) * sqrt(variance) + mean;
+    return res;
 }
 
 fn random_direction(seed: u32) -> array<f32, d> {
     var dir: array<f32, d>;
     var sum = 0.0;
-    for (var k = 0u; k < d; k++) {
-        dir[k] = gaussian(seed ^ (k * 16777619u), 0.0, 1.0);
-        sum += dir[k] * dir[k];
+    for (var k = 0u; k < d / 2u; k++) {
+        let g = gaussian(seed ^ (k * 16777619u), 0.0, 1.0);
+        dir[2*k] = g.x;
+        dir[2*k+1] = g.y;
+        sum += g.x * g.x + g.y * g.y;
+    }
+    if (d % 2u != 0u) {
+        let g = gaussian(seed ^ (d - 1u) * 16777619u, 0.0, 1.0);
+        dir[d - 1u] = g.x;
+        sum += g.x * g.x;
     }
     if (sum > 0.0) {
         sum = sqrt(sum);
@@ -165,7 +175,7 @@ fn omega(m: f32, params: vec2<f32>, seed: u32) -> array<f32, d> {
     let scale_seed = (seed << 13u) | (seed >> 19u);
     let q = params.x;
     let a = params.y;
-    let scale = a * max_dF * gaussian(scale_seed, 0.0, sigma2(m, q));
+    let scale = a * max_dF * gaussian(scale_seed, 0.0, sigma2(m, q)).x;
     for (var k = 0u; k < d; k++) {
         omega_value[k] = dir[k] * scale;
     }
