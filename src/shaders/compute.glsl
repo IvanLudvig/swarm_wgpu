@@ -142,6 +142,15 @@ fn gaussian(seed: u32, mean: f32, variance: f32) -> vec2<f32> {
     return res;
 }
 
+fn levy(seed: u32, alpha: f32, c: f32) -> f32 {
+    let u = rand(seed, -PI/2, PI/2);
+    if (alpha == 1.0) {
+        return c * tan(u);
+    }
+    let w = -log(rand(seed, 0.0, 1.0));
+    return c * (sin(alpha * u) / pow(abs(cos(alpha * u)), 1.0 / alpha)) * pow(cos((1-alpha)*u)/w, (1-alpha)/alpha);
+}
+
 fn random_direction(seed: u32) -> array<f32, d> {
     var dir: array<f32, d>;
     var sum = 0.0;
