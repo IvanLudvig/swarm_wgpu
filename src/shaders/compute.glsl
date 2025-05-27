@@ -1,21 +1,24 @@
 const PI = 3.14159265358979323846;
 const PHI = 0x9e3779b9u;
 
-const GRID_SIZE = 12u;
+const GRID_SIZE = 27u;
 const SAMPLES = 1000u;
 const T = 1000u;
 const T_early = 200u;
 const tau = 1e-4;
 
-const N = 50u;
-const WORKGROUP_SIZE = 50u;
-// const dm = 1e-3 / f32(N);
+const N = 10u;
+const WORKGROUP_SIZE = 10u;
+const m0 = 0.1;
 const dm = 1e-4;
 const d = 3u;
 const L = 6.0;
 const B = 0.0;
 
-const max_dF = 66.0;
+const RANDOM_TYPE = 0u; // 0: gaussian, 1: levy
+const FUNC = 1u; // 0: sphere, 1: rastrigin, 2: ackley, 3: rosenbrock
+
+const max_dF = 0.01;
 
 @group(0) @binding(0) var<storage, read_write> output_x: array<f32, GRID_SIZE * SAMPLES * d>;
 @group(0) @binding(1) var<storage, read_write> output_f: array<f32, GRID_SIZE * SAMPLES>;
@@ -92,24 +95,63 @@ fn dSphere(x: array<f32, d>) -> array<f32, d> {
     return dF_value;
 }
 
-fn F(x: array<f32, d>) -> f32 {
-    var shifted_x: array<f32, d>;
-    for (var i = 0u; i < d; i++) {
-        shifted_x[i] = x[i] + B;
+fn rosenbrock(x: array<f32, d>) -> f32 {
+    var F_value = 0.0;
+    for (var i = 0u; i < d - 1u; i++) {
+        let a = x[i+1] - x[i] * x[i];
+        let b = 1.0 - x[i];
+        F_value += 100.0 * a * a + b * b;
     }
-    return rastrigin(shifted_x);
+    return F_value;
+}
+
+fn dRosenbrock(x: array<f32, d>) -> array<f32, d> {
+    var dF_value: array<f32, d>;
+    for (var i = 0u; i < d - 1u; i++) {
+        let a = x[i+1] - x[i] * x[i];
+        let b = 1.0 - x[i];
+        dF_value[i] = dF_value[i] - 400.0 * a * x[i] - 2.0 * b;
+        dF_value[i+1] = dF_value[i+1] + 200.0 * a;
+    }
+    return dF_value;
+}
+
+fn shift_x(x: array<f32, d>) -> array<f32, d> {
+    if (abs(B) > 0.0) {
+        var shifted_x: array<f32, d>;
+        for (var i = 0u; i < d; i++) {
+            shifted_x[i] = x[i] + B;
+        }
+        return shifted_x;
+    }
+    return x;
+}
+
+fn F(x: array<f32, d>) -> f32 {
+    var shifted_x = shift_x(x);
+    if (FUNC == 1u) {
+        return rastrigin(shifted_x);
+    } else if (FUNC == 2u) {
+        return ackley(shifted_x);
+    } else if (FUNC == 3u) {
+        return rosenbrock(shifted_x);
+    }
+    return sphere(shifted_x);
 }
 
 fn dF(x: array<f32, d>) -> array<f32, d> {
-    var shifted_x: array<f32, d>;
-    for (var i = 0u; i < d; i++) {
-        shifted_x[i] = x[i] + B;
+    var shifted_x = shift_x(x);
+    if (FUNC == 1u) {
+        return dRastrigin(shifted_x);
+    } else if (FUNC == 2u) {
+        return dAckley(shifted_x);
+    } else if (FUNC == 3u) {
+        return dRosenbrock(shifted_x);
     }
-    return dRastrigin(shifted_x);
+    return dSphere(shifted_x);
 }
 
 fn rand(x: u32, min_x: f32, max_x: f32) -> f32 {
-    // PCG (Permuted Congruential Generator)
     var state = x;
     
     state = state ^ (state >> 15u);
@@ -147,8 +189,11 @@ fn levy(seed: u32, alpha: f32, c: f32) -> f32 {
     if (alpha == 1.0) {
         return c * tan(u);
     }
-    let w = -log(rand(seed, 0.0, 1.0));
-    return c * (sin(alpha * u) / pow(abs(cos(alpha * u)), 1.0 / alpha)) * pow(cos((1-alpha)*u)/w, (1-alpha)/alpha);
+    let w = -log(rand(seed + 1u, 0.0, 1.0));
+
+    let a = sin(alpha * u);
+    let b = pow(abs(cos(u)), 1.0 / alpha);
+    return c * (a / b) * pow(cos((1.0 - alpha) * u) / w, (1.0 - alpha) / alpha);
 }
 
 fn random_direction(seed: u32) -> array<f32, d> {
@@ -182,11 +227,20 @@ fn omega(m: f32, params: vec2<f32>, seed: u32) -> array<f32, d> {
     var omega_value: array<f32, d>;
     let dir = random_direction(seed);
     let scale_seed = (seed << 13u) | (seed >> 19u);
+
     let q = params.x;
-    let a = params.y;
-    let scale = a * max_dF * gaussian(scale_seed, 0.0, sigma2(m, q)).x;
-    for (var k = 0u; k < d; k++) {
-        omega_value[k] = dir[k] * scale;
+    let c = params.y;
+
+    if (RANDOM_TYPE == 0u) {
+        let scale = c * max_dF * gaussian(scale_seed, 0.0, sigma2(m, q)).x;
+        for (var k = 0u; k < d; k++) {
+            omega_value[k] = dir[k] * scale;
+        }
+    } else {
+        let scale = max_dF * c * levy(scale_seed, q, 1.);
+        for (var k = 0u; k < d; k++) {
+            omega_value[k] = dir[k] * scale;
+        }
     }
     return omega_value;
 }
@@ -222,13 +276,12 @@ fn cs(
     let i = local_id.x;
         
     let params = vec2<f32>(
-        params_space[param_id].x, 
+        params_space[param_id].x,
         params_space[param_id].y
     );
     
     var x: array<f32, d> = get_x(i, sample_id);
-    // var m = 1.0 / f32(N);
-    var m = 0.1;
+    var m = m0;
     var f = F(x);
     var df = dF(x);
     inactive[i] = u32(i >= N);
@@ -248,9 +301,10 @@ fn cs(
                 let mixed_seed = omega_seed ^ (omega_seed >> 16u);
                 
                 let omega_value = omega(m, params, mixed_seed);
+                let omega_power = select(1 / params.x, 0.5, RANDOM_TYPE == 0u);
                 for (var k = 0u; k < d; k++) {
                     if (m > dm) {
-                        x[k] = x[k] + (tau/m) * (-df[k] + omega_value[k]);
+                        x[k] = x[k] + (1/m) * (-tau * df[k] + pow(tau, omega_power) * omega_value[k]);
                     }
                 }
                 f = F(x);
