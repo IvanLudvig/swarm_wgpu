@@ -1,7 +1,7 @@
 const PI = 3.14159265358979323846;
 const PHI = 0x9e3779b9u;
 
-const GRID_SIZE = 27u;
+const GRID_SIZE = 21u;
 const SAMPLES = 1000u;
 const T = 1000u;
 const T_early = 200u;
@@ -17,8 +17,6 @@ const B = 0.0;
 
 const RANDOM_TYPE = 0u; // 0: gaussian, 1: levy
 const FUNC = 1u; // 0: sphere, 1: rastrigin, 2: ackley, 3: rosenbrock
-
-const max_dF = 0.01;
 
 @group(0) @binding(0) var<storage, read_write> output_x: array<f32, GRID_SIZE * SAMPLES * d>;
 @group(0) @binding(1) var<storage, read_write> output_f: array<f32, GRID_SIZE * SAMPLES>;
@@ -116,39 +114,26 @@ fn dRosenbrock(x: array<f32, d>) -> array<f32, d> {
     return dF_value;
 }
 
-fn shift_x(x: array<f32, d>) -> array<f32, d> {
-    if (abs(B) > 0.0) {
-        var shifted_x: array<f32, d>;
-        for (var i = 0u; i < d; i++) {
-            shifted_x[i] = x[i] + B;
-        }
-        return shifted_x;
-    }
-    return x;
-}
-
 fn F(x: array<f32, d>) -> f32 {
-    var shifted_x = shift_x(x);
     if (FUNC == 1u) {
-        return rastrigin(shifted_x);
+        return rastrigin(x);
     } else if (FUNC == 2u) {
-        return ackley(shifted_x);
+        return ackley(x);
     } else if (FUNC == 3u) {
-        return rosenbrock(shifted_x);
+        return rosenbrock(x);
     }
-    return sphere(shifted_x);
+    return sphere(x);
 }
 
 fn dF(x: array<f32, d>) -> array<f32, d> {
-    var shifted_x = shift_x(x);
     if (FUNC == 1u) {
-        return dRastrigin(shifted_x);
+        return dRastrigin(x);
     } else if (FUNC == 2u) {
-        return dAckley(shifted_x);
+        return dAckley(x);
     } else if (FUNC == 3u) {
-        return dRosenbrock(shifted_x);
+        return dRosenbrock(x);
     }
-    return dSphere(shifted_x);
+    return dSphere(x);
 }
 
 fn rand(x: u32, min_x: f32, max_x: f32) -> f32 {
@@ -232,12 +217,12 @@ fn omega(m: f32, params: vec2<f32>, seed: u32) -> array<f32, d> {
     let c = params.y;
 
     if (RANDOM_TYPE == 0u) {
-        let scale = c * max_dF * gaussian(scale_seed, 0.0, sigma2(m, q)).x;
+        let scale = c * gaussian(scale_seed, 0.0, sigma2(m, q)).x;
         for (var k = 0u; k < d; k++) {
             omega_value[k] = dir[k] * scale;
         }
     } else {
-        let scale = max_dF * c * levy(scale_seed, q, 1.);
+        let scale = c * levy(scale_seed, q, 1.);
         for (var k = 0u; k < d; k++) {
             omega_value[k] = dir[k] * scale;
         }
@@ -249,7 +234,7 @@ fn f(m: f32) -> f32 {
     return sqrt(m) / (1 + sqrt(m));
 }
 
-fn get_x(i: u32, sample_id: u32) -> array<f32, d> {
+fn init_x(i: u32, sample_id: u32) -> array<f32, d> {
     var x: array<f32, d>;
     
     var base_seed = sample_id * PHI + i * 0x85ebca77u + 0xc2b2ae3du;
@@ -260,7 +245,7 @@ fn get_x(i: u32, sample_id: u32) -> array<f32, d> {
     
     for (var k = 0u; k < d; k++) {
         let dim_seed = base_seed + k * PHI;
-        x[k] = rand(dim_seed, -L/2.0, L/2.0);
+        x[k] = rand(dim_seed, -L/2.0, L/2.0) + B;
     }
     return x;
 }
@@ -280,7 +265,7 @@ fn cs(
         params_space[param_id].y
     );
     
-    var x: array<f32, d> = get_x(i, sample_id);
+    var x: array<f32, d> = init_x(i, sample_id);
     var m = m0;
     var f = F(x);
     var df = dF(x);
@@ -367,7 +352,7 @@ fn cs(
     if (i == 0u) {
         let output_index = param_id * SAMPLES + sample_id;
         for (var k = 0u; k < d; k++) {
-            output_x[output_index * d + k] = best_x[k] + B;
+            output_x[output_index * d + k] = best_x[k];
         }
         output_f[output_index] = best_f;
         output_n[output_index] = best_n;
